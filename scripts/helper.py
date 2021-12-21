@@ -1,14 +1,27 @@
+import requests  # Download the file
 import psycopg2
 import os
+from io import StringIO
+
 import calendar
 from datetime import datetime
 
+from tqdm import tqdm  # Progress Bar
 from dotenv import load_dotenv
-
+from pathlib import Path
 import pandas as pd
 
 import plotly.express as px
 import plotly.graph_objects as go
+
+
+"""
+Function List
+** download_file
+** make_connection
+** fetch_data_from_database
+** 
+"""
 
 
 TITLES = [
@@ -21,7 +34,36 @@ TITLES = [
 ]
 
 
-def make_connection(table, column=None, value=None):
+def download_file(url):
+    """
+    Download the requested file to the same directory
+    """
+
+    file_name = url.split("/")[-1]
+
+    req = requests.get(url, stream=True, allow_redirects=True)
+    total_size = int(req.headers.get("content-length"))
+    initial_pos = 0
+    file_path = f"../../Data/{file_name}"
+
+    # Progress Bar to monitor download
+    with open(file_path, "wb") as obj:
+        with tqdm(
+            total=total_size,
+            unit_scale=True,
+            desc=file_name,
+            initial=initial_pos,
+            ascii=True,
+        ) as pbar:
+            for chunk in req.iter_content(chunk_size=1024):
+                if chunk:
+                    obj.write(chunk)
+                    pbar.update(len(chunk))
+
+    return file_path
+
+
+def make_connection():
     """Create a connection to PostgreSQL database
 
     Returns
@@ -29,7 +71,8 @@ def make_connection(table, column=None, value=None):
     connection
         Load DB credential from .env file and connect to PostgreSQL
     """
-    load_dotenv()
+    dotenv_path = Path("../misc/.env")
+    load_dotenv(dotenv_path=dotenv_path)
 
     DB_NAME = os.getenv("DB_NAME")
     DB_USER = os.getenv("DB_USER")
@@ -39,29 +82,202 @@ def make_connection(table, column=None, value=None):
 
     try:
         print("Connecting to the PostgreSQL database...")
-        with psycopg2.connect(
+        conn = psycopg2.connect(
             host=HOST, database=DB_NAME, user=DB_USER, password=DB_PASSWORD, port=PORT
-        ) as conn:
-            print("Connection successful")
-            cursor = conn.cursor()
-            cursor.execute("SELECT version()")
-            db_version = cursor.fetchone()
+        )
 
-            print(f"Version: {db_version}\nFetching Data from database...")
+        print("Connection successful")
+        cursor = conn.cursor()
+        cursor.execute("SELECT version()")
+        db_version = cursor.fetchone()
 
-            if column is not None and value is not None:
-                query = f"SELECT * FROM {table} WHERE {column} = '{value}'"
-            else:
-                query = f"SELECT * FROM {table}"
+        print(f"Version: {db_version}\nFetching Data from database...")
 
-            df = pd.read_sql_query(sql=query, con=conn, parse_dates=["date"])
-            print(f"Data Fetched\n============")
-
-        return df
+        return conn
 
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error: {error}")
         return -1
+
+
+def fetch_data_from_database(conn, table, column=None, value=None):
+
+    if column is not None and value is not None:
+        query = f"SELECT * FROM {table} WHERE {column} = '{value}'"
+    else:
+        query = f"SELECT * FROM {table}"
+
+    df = pd.read_sql_query(sql=query, con=conn, parse_dates=["date"])
+    print(f"Data Fetched\n============")
+
+    return df
+
+
+def create_tables_google(conn):
+
+    queries = (
+        """ 
+        CREATE TABLE IF NOT EXISTS countries_google (
+            country_region_code varchar(2) PRIMARY KEY,
+            country_region varchar(30)    
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS location_util_google (
+            country_region_code varchar(2),
+            iso_3166_2_code varchar(6),
+            census_fips_code numeric(5,0),
+            place_id varchar(27),
+            
+            FOREIGN KEY (country_region_code) 
+                REFERENCES countries_google (country_region_code)
+        )
+        """,
+        """ 
+        CREATE TABLE IF NOT EXISTS mobility_stats_google (
+            country_region_code varchar(2),
+            sub_region_1 varchar(100),
+            sub_region_2 varchar(100),
+            metro_area varchar(50),
+            date date,
+            retail_and_recreation_percent_change_from_baseline numeric(4,0),
+            grocery_and_pharmacy_percent_change_from_baseline numeric(4,0),
+            parks_percent_change_from_baseline numeric(4,0),
+            transit_stations_percent_change_from_baseline numeric(4,0),
+            workplaces_percent_change_from_baseline numeric(4,0),
+            residential_percent_change_from_baseline numeric(4,0),
+            
+            FOREIGN KEY (country_region_code) 
+                REFERENCES countries_google (country_region_code)
+        )
+        """,
+    )
+    try:
+        with conn.cursor() as cursor:
+            for query in queries:
+                cursor.execute(query)
+            conn.commit()
+            print("Tables created successfully!\n----------------------------")
+            return 1
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error while creating tables!\nRolling back changes...\n", error)
+        conn.rollback()
+        return -1
+
+
+def create_tables_apple(conn):
+
+    queries = (
+        """ 
+        CREATE TABLE IF NOT EXISTS countries_apple (
+            region varchar(48),
+            geo_type varchar(14),
+            alternative_name varchar(85),
+            sub_region varchar(33),
+            country varchar(20)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS mobility_stats_apple (
+            region varchar(48),
+            date date,
+            driving numeric(6,2),
+            transit numeric(6,2),
+            walking numeric(6,2),
+            
+            PRIMARY KEY (region, date)
+        )
+        """,
+    )
+    try:
+        with conn.cursor() as cursor:
+            for query in queries:
+                cursor.execute(query)
+            conn.commit()
+            print("Tables created successfully!\n----------------------------")
+
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error while creating tables!\nRolling back changes...\n", error)
+        conn.rollback()
+        return -1
+
+
+def create_tables_json(conn):
+
+    queries = """ 
+        CREATE TABLE IF NOT EXISTS covid_data_greece (
+            date date PRIMARY KEY,
+            confirmed numeric(7, 0),
+            recovered numeric(5, 0),
+            deaths numeric(5, 0)
+        )
+        """
+
+    try:
+        with conn.cursor() as cursor:
+            for query in queries:
+                cursor.execute(query)
+            conn.commit()
+
+            print(
+                f"Table `covid_data_greece` created successfully!\n-----------------------------------------------"
+            )
+
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("Error while creating tables!\nRolling back changes...\n", error)
+        conn.rollback()
+
+
+def import_data(conn, table_name, df):
+
+    buffer = StringIO()
+    df.to_csv(buffer, header=False, index=False)
+    buffer.seek(0)
+
+    with conn.cursor() as cursor:
+        try:
+            cursor.execute(f"TRUNCATE {table_name} CASCADE;")
+            print(f"Truncated {table_name}")
+
+            df.where(pd.notnull(df), None)
+
+            cursor.copy_expert(f"COPY {table_name} from STDIN CSV QUOTE '\"'", buffer)
+            conn.commit()
+            print("Done!\n-------------------------------")
+            return 1
+
+        except (Exception, psycopg2.DatabaseError) as error:
+            print("Error: %s" % error)
+            conn.rollback()
+            return -1
+
+
+def rearrange_df(df):
+
+    """ 
+    1. Convert columns to rows
+    2. Convert rows to columns
+    3. Drop level to get one level of columns
+    4. Rename axis to remove transportation_type which is our previous column name
+    5. Reset index to convert our indices to columns
+    """
+
+    inter_df = pd.melt(
+        frame=df,
+        id_vars=["region", "transportation_type"],
+        value_vars=df.columns[2:],
+        var_name="date",
+        value_name="percent_change_from_baseline",
+    )
+    inter_df = pd.pivot_table(
+        inter_df, columns="transportation_type", index=["region", "date"]
+    )
+
+    inter_df.columns = inter_df.columns.droplevel()
+    inter_df = inter_df.rename_axis(None, axis=1)
+    inter_df = inter_df.reset_index()
+
+    return inter_df
 
 
 def clean_df(df: pd.DataFrame) -> pd.DataFrame:
