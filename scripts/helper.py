@@ -15,15 +15,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 
-"""
-Function List
-** download_file
-** make_connection
-** fetch_data_from_database
-** 
-"""
-
-
 TITLES = [
     "Retail and recreation",
     "Grocery and pharmacy stores",
@@ -63,7 +54,7 @@ def download_file(url):
     return file_path
 
 
-def make_connection():
+def _make_connection():
     """Create a connection to PostgreSQL database
 
     Returns
@@ -100,7 +91,9 @@ def make_connection():
         return -1
 
 
-def fetch_data_from_database(conn, table, column=None, value=None):
+def fetch_data_from_database(table, column=None, value=None) -> pd.DataFrame:
+
+    conn = _make_connection()
 
     if column is not None and value is not None:
         query = f"SELECT * FROM {table} WHERE {column} = '{value}'"
@@ -152,6 +145,7 @@ def create_tables_google(conn):
         )
         """,
     )
+
     try:
         with conn.cursor() as cursor:
             for query in queries:
@@ -189,6 +183,7 @@ def create_tables_apple(conn):
         )
         """,
     )
+
     try:
         with conn.cursor() as cursor:
             for query in queries:
@@ -228,7 +223,7 @@ def create_tables_json(conn):
         conn.rollback()
 
 
-def import_data(conn, table_name, df):
+def import_data(conn, table_name, df) -> int:
 
     buffer = StringIO()
     df.to_csv(buffer, header=False, index=False)
@@ -252,7 +247,7 @@ def import_data(conn, table_name, df):
             return -1
 
 
-def rearrange_df(df):
+def rearrange_df(df) -> pd.DataFrame:
 
     """ 
     1. Convert columns to rows
