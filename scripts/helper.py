@@ -1,4 +1,4 @@
-import requests  # Download the file
+import requests
 import psycopg2
 import os
 from io import StringIO
