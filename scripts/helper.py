@@ -1,19 +1,16 @@
-import requests
-import psycopg2
-import os
-from io import StringIO
-
 import calendar
+import os
 from datetime import datetime
-
-from tqdm import tqdm  # Progress Bar
-from dotenv import load_dotenv
+from io import StringIO
 from pathlib import Path
-import pandas as pd
 
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-
+import psycopg2
+import requests
+from dotenv import load_dotenv
+from tqdm import tqdm  # Progress Bar
 
 TITLES = [
     "Retail and recreation",
@@ -27,13 +24,16 @@ TITLES = [
 
 def download_file(url):
     """
-    Download the requested file to the same directory
+    Downloads a file from a url and saves it to a specified file path.
+    
+    :param url: The URL of the file to download
+    :return: The file path of the downloaded file.
     """
 
     file_name = url.split("/")[-1]
 
     req = requests.get(url, stream=True, allow_redirects=True)
-    total_size = int(req.headers.get("content-length"))
+    total_size = req.headers.get("content-length")
     initial_pos = 0
     file_path = f"../../Data/{file_name}"
 
@@ -55,13 +55,11 @@ def download_file(url):
 
 
 def _make_connection():
-    """Create a connection to PostgreSQL database
-
-    Returns
-    -------
-    connection
-        Load DB credential from .env file and connect to PostgreSQL
     """
+    This function connects to the database and returns the connection object.
+    :return: A connection object
+    """
+
     dotenv_path = Path("../misc/.env")
     load_dotenv(dotenv_path=dotenv_path)
 
@@ -92,6 +90,15 @@ def _make_connection():
 
 
 def fetch_data_from_database(table, column=None, value=None) -> pd.DataFrame:
+    """
+    It connects to the database,
+    and fetches data from a table
+    
+    :param table: The name of the table to query
+    :param column: The column to filter on
+    :param value: The value of the column you want to filter by
+    :return: A dataframe
+    """
 
     conn = _make_connection()
 
@@ -247,7 +254,7 @@ def import_data(conn, table_name, df) -> int:
             return -1
 
 
-def rearrange_df(df) -> pd.DataFrame:
+def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
 
     """ 
     1. Convert columns to rows
@@ -276,16 +283,14 @@ def rearrange_df(df) -> pd.DataFrame:
 
 
 def clean_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Check DataFrame for null rows and/or columns
-
-    Parameters
-    ----------
-    df : DataFrame
-
-    Returns
-    -------
-    DataFrame
-        cleaned df
+    """
+    It takes a dataframe as an argument, and returns a cleaned dataframe.
+    
+    Args:
+      df (pd.DataFrame): The dataframe to clean
+    
+    Returns:
+      A cleaned dataframe.
     """
     df.info()
 
@@ -303,13 +308,14 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def plot_corr_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate a correlation matrix
-
-    Parameters
-    ----------
-    df : DataFrame
+def plot_corr_matrix(df: pd.DataFrame):
     """
+    Plot a correlation matrix of a pandas dataframe.
+    
+    Args:
+      df (pd.DataFrame): The dataframe to be plotted
+    """
+
     correlation_matrix = df.corr()
     labels = [" ".join(column.split("_")[:-4]).title() for column in df.columns[3:]]
     fig = px.imshow(correlation_matrix, x=labels, y=labels)
@@ -318,17 +324,17 @@ def plot_corr_matrix(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def aggregate_by_group(df: pd.DataFrame, group: str = "season"):
-    """Aggregate data specified by the group parameter (can be set either month or season)
-
-    Parameters
-    ----------
-    df : DataFrame
-    group : str, optional
-        group to aggregate by, by default "season"
-
-    Returns
-    -------
-    DataFrame   
+    """
+    It takes a dataframe and a group name as input.
+    It then extracts the month from the date column and groups the months into seasons.
+    It then calculates the mean, median, min and max for each season.
+    
+    Args:
+      df (pd.DataFrame): The dataframe to aggregate
+      group (str): The column to group by. Defaults to season
+    
+    Returns:
+      The dataframe, the statistics, and the index of the first column of the statistics.
     """
 
     # Extracting the month from the date column
@@ -371,6 +377,16 @@ def season_histplots(df: pd.DataFrame, start_idx: int):
 def plot_exponential_moving_average(
     df: pd.DataFrame, column: str, alpha: int, title: str
 ):
+    """
+    It plots the daily values of a column in a dataframe, and plots the exponential moving average of
+    the column.
+    
+    Args:
+      df (pd.DataFrame): The dataframe containing the data to be plotted.
+      column (str): the column in the dataframe to plot
+      alpha (int): The smoothing factor.
+      title (str): The title of the plot
+    """
 
     EMA = df[column].ewm(alpha=alpha, adjust=True).mean()
     x = df["date"]
@@ -406,6 +422,12 @@ def day_by_day_trends(df: pd.DataFrame):
 
 
 def monthly_changes(df: pd.DataFrame):
+    """
+    It takes a dataframe, resamples it by month, and then plots the mean of each column.
+    
+    Args:
+      df (pd.DataFrame): pd.DataFrame
+    """
     monthly_report = (
         df.resample("MS", on="date").mean().reset_index()
     )  # MS = Month Start
@@ -458,7 +480,7 @@ def select_daterange(
     return df.loc[mask]
 
 
-def corr_heatmap(df: pd.DataFrame, x, y):
+def corr_heatmap(df: pd.DataFrame, x_column, y_column):
     x_index = df.columns.get_loc(x) - 3
     x_label = TITLES[x_index]
 
@@ -467,9 +489,9 @@ def corr_heatmap(df: pd.DataFrame, x, y):
 
     fig = px.density_heatmap(
         data_frame=df,
-        x=x,
-        y=y,
-        labels={x: x_label, y: y_label},
+        x=x_column,
+        y=y_column,
+        labels={x_column: x_label, y_column: y_label},
         marginal_x="violin",
         marginal_y="violin",
         width=800,
