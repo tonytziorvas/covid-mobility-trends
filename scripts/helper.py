@@ -1,16 +1,17 @@
 import calendar
 import os
 from datetime import datetime
-from io import StringIO
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import psycopg2
 import requests
 from dotenv import load_dotenv
-from tqdm import tqdm  # Progress Bar
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+from tqdm import tqdm
 
 TITLES = [
     "Retail and recreation",
@@ -22,241 +23,104 @@ TITLES = [
 ]
 
 
+def init():
+    if not os.path.exists("../misc") or os.path.exists("misc"):
+        print("No misc folder located\n Creating misc folder in parent directory...")
+        os.mkdir("../misc")
+    else:
+        print("Misc Folder located!")
+    if not os.path.exists("../plots") or os.path.exists("plots"):
+        print("No plots folder located\n Creating plots folder in parent directory...")
+        os.mkdir("../plots")
+    else:
+        print("Plots Folder located!")
+
+
 def download_file(url):
+    with requests.get(url, stream=True) as res:
+        file_name = url.split("/")[-1]
+        file_path = f"../../Data/{file_name}"
+        total_size = int(res.headers.get("content-length", 0))
+        block_size = 4096
+
+        with open(file_path, "wb") as file:
+            with tqdm(
+                total=total_size, unit_scale=True, desc=file_name, initial=0, ascii=True
+            ) as progress_bar:
+                for data in res.iter_content(chunk_size=block_size):
+                    progress_bar.update(len(data))
+                    file.write(data)
+
+        return file_path
+
+
+def _make_connection(dialect: str = "psycopg2") -> Engine:
+    """Make a connection to the database using the psycopg2 dialect if no other is sp
+
+    Parameters
+    ----------
+    dialect : str, optional
+
+    Returns
+    -------
+        A connection to the database.
+
     """
-    Downloads a file from a url and saves it to a specified file path.
-    
-    :param url: The URL of the file to download
-    :return: The file path of the downloaded file.
-    """
-
-    file_name = url.split("/")[-1]
-
-    req = requests.get(url, stream=True, allow_redirects=True)
-    total_size = req.headers.get("content-length")
-    initial_pos = 0
-    file_path = f"../../Data/{file_name}"
-
-    # Progress Bar to monitor download
-    with open(file_path, "wb") as obj:
-        with tqdm(
-            total=total_size,
-            unit_scale=True,
-            desc=file_name,
-            initial=initial_pos,
-            ascii=True,
-        ) as pbar:
-            for chunk in req.iter_content(chunk_size=1024):
-                if chunk:
-                    obj.write(chunk)
-                    pbar.update(len(chunk))
-
-    return file_path
-
-
-def _make_connection():
-    """
-    This function connects to the database and returns the connection object.
-    :return: A connection object
-    """
-
     dotenv_path = Path("../misc/.env")
     load_dotenv(dotenv_path=dotenv_path)
 
-    DB_NAME = os.getenv("DB_NAME")
     DB_USER = os.getenv("DB_USER")
     DB_PASSWORD = os.getenv("DB_PASSWORD")
     HOST = os.getenv("HOST")
     PORT = os.getenv("PORT")
+    DB_NAME = os.getenv("DB_NAME")
 
-    try:
-        print("Connecting to the PostgreSQL database...")
-        conn = psycopg2.connect(
-            host=HOST, database=DB_NAME, user=DB_USER, password=DB_PASSWORD, port=PORT
-        )
-
-        print("Connection successful")
-        cursor = conn.cursor()
-        cursor.execute("SELECT version()")
-        db_version = cursor.fetchone()
-
-        print(f"Version: {db_version}\nFetching Data from database...")
-
-        return conn
-
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error: {error}")
-        return -1
-
-
-def fetch_data_from_database(table, column=None, value=None) -> pd.DataFrame:
-    """
-    It connects to the database,
-    and fetches data from a table
-    
-    :param table: The name of the table to query
-    :param column: The column to filter on
-    :param value: The value of the column you want to filter by
-    :return: A dataframe
-    """
-
-    conn = _make_connection()
-
-    if column is not None and value is not None:
-        query = f"SELECT * FROM {table} WHERE {column} = '{value}'"
-    else:
-        query = f"SELECT * FROM {table}"
-
-    df = pd.read_sql_query(sql=query, con=conn, parse_dates=["date"])
-    print(f"Data Fetched\n============")
-
-    return df
-
-
-def create_tables_google(conn):
-
-    queries = (
-        """ 
-        CREATE TABLE IF NOT EXISTS countries_google (
-            country_region_code varchar(2) PRIMARY KEY,
-            country_region varchar(30)    
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS location_util_google (
-            country_region_code varchar(2),
-            iso_3166_2_code varchar(6),
-            census_fips_code numeric(5,0),
-            place_id varchar(27),
-            
-            FOREIGN KEY (country_region_code) 
-                REFERENCES countries_google (country_region_code)
-        )
-        """,
-        """ 
-        CREATE TABLE IF NOT EXISTS mobility_stats_google (
-            country_region_code varchar(2),
-            sub_region_1 varchar(100),
-            sub_region_2 varchar(100),
-            metro_area varchar(50),
-            date date,
-            retail_and_recreation_percent_change_from_baseline numeric(4,0),
-            grocery_and_pharmacy_percent_change_from_baseline numeric(4,0),
-            parks_percent_change_from_baseline numeric(4,0),
-            transit_stations_percent_change_from_baseline numeric(4,0),
-            workplaces_percent_change_from_baseline numeric(4,0),
-            residential_percent_change_from_baseline numeric(4,0),
-            
-            FOREIGN KEY (country_region_code) 
-                REFERENCES countries_google (country_region_code)
-        )
-        """,
+    print(
+        "Connecting to the PostgreSQL database...\n========================================"
     )
 
-    try:
-        with conn.cursor() as cursor:
-            for query in queries:
-                cursor.execute(query)
-            conn.commit()
-            print("Tables created successfully!\n----------------------------")
-            return 1
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error while creating tables!\nRolling back changes...\n", error)
-        conn.rollback()
-        return -1
-
-
-def create_tables_apple(conn):
-
-    queries = (
-        """ 
-        CREATE TABLE IF NOT EXISTS countries_apple (
-            region varchar(48),
-            geo_type varchar(14),
-            alternative_name varchar(85),
-            sub_region varchar(33),
-            country varchar(20)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS mobility_stats_apple (
-            region varchar(48),
-            date date,
-            driving numeric(6,2),
-            transit numeric(6,2),
-            walking numeric(6,2),
-            
-            PRIMARY KEY (region, date)
-        )
-        """,
+    connection_string = (
+        f"postgresql+{dialect}://{DB_USER}:{DB_PASSWORD}@{HOST}:{PORT}/{DB_NAME}"
     )
-
-    try:
-        with conn.cursor() as cursor:
-            for query in queries:
-                cursor.execute(query)
-            conn.commit()
-            print("Tables created successfully!\n----------------------------")
-
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error while creating tables!\nRolling back changes...\n", error)
-        conn.rollback()
-        return -1
+    return create_engine(connection_string, echo=True)
 
 
-def create_tables_json(conn):
+def fetch_data_from_database(
+    table,
+    where_column: Optional[str] = None,
+    where_value: Optional[str] = None,
+    order_by: bool = False,
+    order_col: Optional[str] = None,
+    limit: bool = False,
+    limit_amount: Optional[str] = None,
+    chunk_size: int = 500000,
+) -> pd.DataFrame:
 
-    queries = """ 
-        CREATE TABLE IF NOT EXISTS covid_data_greece (
-            date date PRIMARY KEY,
-            confirmed numeric(7, 0),
-            recovered numeric(5, 0),
-            deaths numeric(5, 0)
-        )
-        """
+    engine = _make_connection()
+    with engine.connect() as connection:
+        with connection.begin():
+            if where_column is not None and where_value is not None:
+                query = f"SELECT * FROM {table} WHERE {where_column} = '{where_value}'"
+            else:
+                query = f"SELECT * FROM {table}"
 
-    try:
-        with conn.cursor() as cursor:
-            for query in queries:
-                cursor.execute(query)
-            conn.commit()
+            if order_by and order_col is not None:
+                query += f" ORDER BY {order_col}"
 
-            print(
-                f"Table `covid_data_greece` created successfully!\n-----------------------------------------------"
-            )
+            if limit and limit_amount is not None:
+                query += f" LIMIT {limit_amount}"
 
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("Error while creating tables!\nRolling back changes...\n", error)
-        conn.rollback()
+            print(f"Data Fetched\n============")
 
-
-def import_data(conn, table_name, df) -> int:
-
-    buffer = StringIO()
-    df.to_csv(buffer, header=False, index=False)
-    buffer.seek(0)
-
-    with conn.cursor() as cursor:
-        try:
-            cursor.execute(f"TRUNCATE {table_name} CASCADE;")
-            print(f"Truncated {table_name}")
-
-            df.where(pd.notnull(df), None)
-
-            cursor.copy_expert(f"COPY {table_name} from STDIN CSV QUOTE '\"'", buffer)
-            conn.commit()
-            print("Done!\n-------------------------------")
-            return 1
-
-        except (Exception, psycopg2.DatabaseError) as error:
-            print("Error: %s" % error)
-            conn.rollback()
-            return -1
+            chunks = [
+                c for c in pd.read_sql(sql=query, con=connection, chunksize=chunk_size)
+            ]
+            return pd.concat(chunks, ignore_index=True).to_frame()
 
 
 def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
 
-    """ 
+    """
     1. Convert columns to rows
     2. Convert rows to columns
     3. Drop level to get one level of columns
@@ -267,7 +131,7 @@ def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
     inter_df = pd.melt(
         frame=df,
         id_vars=["region", "transportation_type"],
-        value_vars=df.columns[2:],
+        value_vars=tuple(df.columns[2:]),
         var_name="date",
         value_name="percent_change_from_baseline",
     )
@@ -285,10 +149,10 @@ def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
 def clean_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     It takes a dataframe as an argument, and returns a cleaned dataframe.
-    
+
     Args:
       df (pd.DataFrame): The dataframe to clean
-    
+
     Returns:
       A cleaned dataframe.
     """
@@ -311,7 +175,7 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
 def plot_corr_matrix(df: pd.DataFrame):
     """
     Plot a correlation matrix of a pandas dataframe.
-    
+
     Args:
       df (pd.DataFrame): The dataframe to be plotted
     """
@@ -328,11 +192,11 @@ def aggregate_by_group(df: pd.DataFrame, group: str = "season"):
     It takes a dataframe and a group name as input.
     It then extracts the month from the date column and groups the months into seasons.
     It then calculates the mean, median, min and max for each season.
-    
+
     Args:
       df (pd.DataFrame): The dataframe to aggregate
       group (str): The column to group by. Defaults to season
-    
+
     Returns:
       The dataframe, the statistics, and the index of the first column of the statistics.
     """
@@ -380,7 +244,7 @@ def plot_exponential_moving_average(
     """
     It plots the daily values of a column in a dataframe, and plots the exponential moving average of
     the column.
-    
+
     Args:
       df (pd.DataFrame): The dataframe containing the data to be plotted.
       column (str): the column in the dataframe to plot
@@ -404,7 +268,7 @@ def plot_exponential_moving_average(
 
 
 def day_by_day_trends(df: pd.DataFrame):
-    """Plot daily trends 
+    """Plot daily trends
 
     Parameters
     ----------
@@ -424,7 +288,7 @@ def day_by_day_trends(df: pd.DataFrame):
 def monthly_changes(df: pd.DataFrame):
     """
     It takes a dataframe, resamples it by month, and then plots the mean of each column.
-    
+
     Args:
       df (pd.DataFrame): pd.DataFrame
     """
@@ -481,10 +345,10 @@ def select_daterange(
 
 
 def corr_heatmap(df: pd.DataFrame, x_column, y_column):
-    x_index = df.columns.get_loc(x) - 3
+    x_index = df.columns.get_loc(x_column) - 3
     x_label = TITLES[x_index]
 
-    y_index = df.columns.get_loc(y) - 3
+    y_index = df.columns.get_loc(y_column) - 3
     y_label = TITLES[y_index]
 
     fig = px.density_heatmap(
