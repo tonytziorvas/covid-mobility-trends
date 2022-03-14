@@ -1,7 +1,9 @@
 import calendar
 import os
+import re
 from datetime import datetime
 from pathlib import Path
+from time import time
 from typing import Optional
 
 import pandas as pd
@@ -9,8 +11,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 from dotenv import load_dotenv
+from matplotlib import offsetbox
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from statsmodels.tsa.stattools import adfuller
 from tqdm import tqdm
 
 TITLES = [
@@ -23,25 +27,42 @@ TITLES = [
 ]
 
 
-def init():
+def __init():
     if not os.path.exists("../misc") or os.path.exists("misc"):
-        print("No misc folder located\n Creating misc folder in parent directory...")
+        print(
+            "No misc folder located at current or parent directory.\n Creating misc folder in parent directory..."
+        )
         os.mkdir("../misc")
     else:
         print("Misc Folder located!")
     if not os.path.exists("../plots") or os.path.exists("plots"):
-        print("No plots folder located\n Creating plots folder in parent directory...")
+        print(
+            "No plots folder located at current or parent directory.\n Creating plots folder in parent directory..."
+        )
         os.mkdir("../plots")
     else:
         print("Plots Folder located!")
 
 
-def download_file(url):
+def download_file(url: str, block_size: int = 4096) -> str:
+    """It downloads a file from a URL and saves it to a specified location
+    
+    Parameters
+    ----------
+    url : str
+        The URL of the file you want to download.
+    block_size : int, optional
+        The amount of data to read at a time.
+    
+    Returns
+    -------
+        The file path to the downloaded file.
+    
+    """
     with requests.get(url, stream=True) as res:
         file_name = url.split("/")[-1]
         file_path = f"../../Data/{file_name}"
         total_size = int(res.headers.get("content-length", 0))
-        block_size = 4096
 
         with open(file_path, "wb") as file:
             with tqdm(
@@ -76,56 +97,103 @@ def _make_connection(dialect: str = "psycopg2") -> Engine:
     DB_NAME = os.getenv("DB_NAME")
 
     print(
-        "Connecting to the PostgreSQL database...\n========================================"
+        "=================================================\n"
+        + "Creating connection to the PostgreSQL database...\n"
+        + "================================================="
     )
 
     connection_string = (
         f"postgresql+{dialect}://{DB_USER}:{DB_PASSWORD}@{HOST}:{PORT}/{DB_NAME}"
     )
-    return create_engine(connection_string, echo=True)
+    return create_engine(connection_string, echo=False)
 
 
 def fetch_data_from_database(
     table,
     where_column: Optional[str] = None,
     where_value: Optional[str] = None,
-    order_by: bool = False,
-    order_col: Optional[str] = None,
-    limit: bool = False,
-    limit_amount: Optional[str] = None,
+    order_by: Optional[str] = None,
+    limit: Optional[str] = None,
+    date_column: str = "date",
     chunk_size: int = 500000,
-) -> pd.DataFrame:
+):
+    """It fetches data from a database table and returns it as a pandas dataframe
+    
+    Parameters
+    ----------
+    table
+        The name of the table you want to fetch from the database.
+    where_column : Optional[str]
+        The column to filter on.
+    where_value : Optional[str]
+        The value of the column that you want to filter by.
+    order_by : Optional[str]
+        This is the column name to order the data by.
+    limit : Optional[str]
+        The number of rows to fetch from the database.
+    date_column : Optional[str]
+        This is a list of columns that should be parsed as datetime.
+    chunk_size : int, optional
+        The number of rows to read in at a time.
+    
+    Returns
+    -------
+        A dataframe
+    
+    """
+    with _make_connection().connect() as connection:
 
-    engine = _make_connection()
-    with engine.connect() as connection:
+        print("Opening connection...")
         with connection.begin():
             if where_column is not None and where_value is not None:
                 query = f"SELECT * FROM {table} WHERE {where_column} = '{where_value}'"
             else:
                 query = f"SELECT * FROM {table}"
 
-            if order_by and order_col is not None:
-                query += f" ORDER BY {order_col}"
+            if order_by is not None:
+                query += f" ORDER BY {order_by}"
 
-            if limit and limit_amount is not None:
-                query += f" LIMIT {limit_amount}"
+            if limit is not None:
+                query += f" LIMIT {limit}"
 
             print(f"Data Fetched\n============")
 
             chunks = [
-                c for c in pd.read_sql(sql=query, con=connection, chunksize=chunk_size)
+                c
+                for c in pd.read_sql_query(
+                    sql=query,
+                    con=connection,
+                    chunksize=chunk_size,
+                    parse_dates=date_column,
+                )
             ]
-            return pd.concat(chunks, ignore_index=True).to_frame()
+
+            return pd.concat(chunks, ignore_index=True, axis=0)
 
 
 def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
+    """The function takes in a dataframe, and returns a dataframe with the following transformations:
 
-    """
-    1. Convert columns to rows
-    2. Convert rows to columns
-    3. Drop level to get one level of columns
-    4. Rename axis to remove transportation_type which is our previous column name
-    5. Reset index to convert our indices to columns
+    - The dataframe is melted, so that the date and the transportation type become the two columns.
+    - The dataframe is pivoted, so that the transportation types become the columns.
+    - The dataframe is indexed by region and date.
+    - The dataframe is renamed so that the transportation types are the column names.
+    - The dataframe is reset, so that the index is the only index
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame to modify.
+
+    Returns
+    -------
+        A dataframe with the following columns:
+        - region
+        - date
+        - walking
+        - driving
+        - transit
+
     """
 
     inter_df = pd.melt(
@@ -140,25 +208,24 @@ def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     inter_df.columns = inter_df.columns.droplevel()
-    inter_df = inter_df.rename_axis(None, axis=1)
-    inter_df = inter_df.reset_index()
+    inter_df = inter_df.rename_axis(None, axis=1).reset_index()
 
     return inter_df
 
 
 def clean_df(df: pd.DataFrame) -> pd.DataFrame:
+    """The function takes in a dataframe and returns a cleaned dataframe
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        the dataframe to be cleaned
+
+    Returns
+    -------
+        A dataframe with the cleaned data.
+
     """
-    It takes a dataframe as an argument, and returns a cleaned dataframe.
-
-    Args:
-      df (pd.DataFrame): The dataframe to clean
-
-    Returns:
-      A cleaned dataframe.
-    """
-    df.info()
-
-    # Cleaning null columns
     print("\nChecking for null columns...")
 
     for column in df.columns:
@@ -166,90 +233,26 @@ def clean_df(df: pd.DataFrame) -> pd.DataFrame:
             df.drop(column, axis=1, inplace=True)
             print(f"-- Dropped null column: {column}")
 
-    # Clearing null rows
     print("\nClearing null rows...")
     df.dropna(axis=0, how="all").sort_values(by="date", inplace=True)
     return df
 
 
-def plot_corr_matrix(df: pd.DataFrame):
-    """
-    Plot a correlation matrix of a pandas dataframe.
-
-    Args:
-      df (pd.DataFrame): The dataframe to be plotted
-    """
-
-    correlation_matrix = df.corr()
-    labels = [" ".join(column.split("_")[:-4]).title() for column in df.columns[3:]]
-    fig = px.imshow(correlation_matrix, x=labels, y=labels)
-    fig.update_xaxes(side="top")
-    fig.show()
-
-
-def aggregate_by_group(df: pd.DataFrame, group: str = "season"):
-    """
-    It takes a dataframe and a group name as input.
-    It then extracts the month from the date column and groups the months into seasons.
-    It then calculates the mean, median, min and max for each season.
-
-    Args:
-      df (pd.DataFrame): The dataframe to aggregate
-      group (str): The column to group by. Defaults to season
-
-    Returns:
-      The dataframe, the statistics, and the index of the first column of the statistics.
-    """
-
-    # Extracting the month from the date column
-    df["month"] = df["date"].dt.month.astype(int)
-
-    if group == "season":
-        # Grouping months into seasons
-        df["season"] = df["month"] % 12 // 3 + 1
-        df["season"][df["season"] == 1] = "Winter"
-        df["season"][df["season"] == 2] = "Spring"
-        df["season"][df["season"] == 3] = "Summer"
-        df["season"][df["season"] == 4] = "Autumn"
-
-    start_idx = df.columns.get_loc("retail_and_recreation_percent_change_from_baseline")
-    stats = (
-        df[df.columns[start_idx:]]
-        .groupby(group)
-        .agg(["mean", "median", "min", "max"])
-        .reset_index()
-    )
-
-    return df, stats, start_idx
-
-
-def season_histplots(df: pd.DataFrame, start_idx: int):
-
-    for column in df.columns[start_idx : start_idx + 6]:
-        fig = px.histogram(
-            data_frame=df,
-            x=column,
-            marginal="box",
-            width=1200,
-            height=600,
-            color="season",
-        )
-        fig.update_layout(bargap=0.05)
-        fig.show()
-
-
-def plot_exponential_moving_average(
-    df: pd.DataFrame, column: str, alpha: int, title: str
-):
-    """
-    It plots the daily values of a column in a dataframe, and plots the exponential moving average of
-    the column.
-
-    Args:
-      df (pd.DataFrame): The dataframe containing the data to be plotted.
-      column (str): the column in the dataframe to plot
-      alpha (int): The smoothing factor.
-      title (str): The title of the plot
+def plot_ema(df: pd.DataFrame, column: str, alpha: int, title: str):
+    """It plots the daily values of a column in a dataframe, and plots the exponential moving average of
+    the column
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The dataframe to plot
+    column : str
+        The column to plot.
+    alpha : int
+        The smoothing factor for the exponential moving average.
+    title : str
+        The title of the plot.
+    
     """
 
     EMA = df[column].ewm(alpha=alpha, adjust=True).mean()
@@ -292,9 +295,9 @@ def monthly_changes(df: pd.DataFrame):
     Args:
       df (pd.DataFrame): pd.DataFrame
     """
-    monthly_report = (
-        df.resample("MS", on="date").mean().reset_index()
-    )  # MS = Month Start
+
+    # MS = Month Start
+    monthly_report = df.resample("MS", on="date").mean().reset_index()
 
     # Range starts from 1 in order to skip Jan-2020
     month_range = [
@@ -331,13 +334,50 @@ def monthly_changes(df: pd.DataFrame):
         fig.show()
 
 
-def select_daterange(
-    df: pd.DataFrame, start_date: datetime, end_date: datetime
-) -> pd.DataFrame:
+def test_stationarity(
+    timeseries: pd.Series, nlags: int = 0, confidence: float = 0.05
+) -> bool:
+    """The Augmented Dickey-Fuller test is a statistical test for testing 
+    whether a time series has a unit root, e.g. has a trend or more generally is autoregressive
+    
+    Parameters
+    ----------
+    timeseries : pd.Series
+        the time series to test
+    nlags : int, optional
+        The number of lags to use in the ADF regression. If 0, the method selects the lag length using the
+    maxlag parameter.
+    confidence : float
+        float, optional
+    
+    Returns
+    -------
+        a boolean value.
+    
+    """
+    print("===========================")
+    print(f" > Is the {nlags}-lag data stationary ?")
+    reject = False
+    result = adfuller(timeseries, autolag="AIC")
+
+    print(f"Test statistic = {result[0]:.3f}")
+    print(f"P-value = {result[1]:.3f}")
+    print("Critical values :")
+    for key, value in result[4].items():  # type: ignore
+        if int(key[:-1]) / 100 == confidence:
+            reject = result[0] > value
+            print(
+                f"\t{key}: {value} - The data is {'not' if reject else ''} stationary with {100-int(key[:-1])}% confidence"
+            )
+
+    return reject
+
+
+def select_daterange(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
 
     fmt = "%Y-%m-%d"
-    start_date = datetime.strptime(start_date, fmt)
-    end_date = datetime.strptime(end_date, fmt)
+    start_date = datetime.strptime(start, fmt)
+    end_date = datetime.strptime(end, fmt)
 
     mask = (df["date"] >= start_date) & (df["date"] <= end_date)
 
@@ -345,19 +385,17 @@ def select_daterange(
 
 
 def corr_heatmap(df: pd.DataFrame, x_column, y_column):
-    x_index = df.columns.get_loc(x_column) - 3
+    x_index = df.columns.get_loc(x_column) - 4
     x_label = TITLES[x_index]
 
-    y_index = df.columns.get_loc(y_column) - 3
+    y_index = df.columns.get_loc(y_column) - 45
     y_label = TITLES[y_index]
 
     fig = px.density_heatmap(
         data_frame=df,
         x=x_column,
         y=y_column,
-        labels={x_column: x_label, y_column: y_label},
-        marginal_x="violin",
-        marginal_y="violin",
+        labels=dict(x_column=x_label, y_column=y_label),
         width=800,
         height=800,
     )
