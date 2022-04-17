@@ -148,4 +148,6 @@ def create_tables_json():
 
 def import_data(df, table_name):
     engine = helper._make_connection()
-    df.to_sql(table_name, engine, index=False, if_exists='append')
+    with engine.connect() as connection:
+        with connection.begin():
+            df.to_sql(table_name, engine, index=False, if_exists='append')
