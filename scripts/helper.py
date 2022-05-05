@@ -13,12 +13,12 @@ from statsmodels.tsa.stattools import adfuller
 from tqdm import tqdm
 
 TITLES = [
-    "Retail and recreation",
-    "Grocery and pharmacy stores",
-    "Parks and outdoor spaces",
-    "Public transport stations",
-    "Workplace visitors",
-    "Time spent at home",
+    "Retail and Recreation",
+    "Grocery and Pharmacy Stores",
+    "Parks and Outdoor Spaces",
+    "Public Transport Stations",
+    "Workplace Visitors",
+    "Time Spent at Home",
 ]
 
 
@@ -393,32 +393,38 @@ def optimize_SARIMA(parameters_list: List[int], d: int, D: int, exog: str) -> pd
     return result_df
 
 
-def walk_forward_validation(data: pd.DataFrame, column: str, n_train: int):
+def walk_forward_validation(data: pd.DataFrame, column: str, n_train: int, n_test: int):
     """
-    > The function takes in a dataframe, a column name, and the number of training days. It then creates a
-    SARIMA model, forecasts the next week, and adds that week to the training data. It repeats this
-    process until all the data has been forecasted
+    > The function takes in a dataframe, a column name, and the number of training and testing days. It
+    then uses the training data to fit a SARIMA model, and uses the model to forecast the next week of
+    data. It then adds the forecasted data to the training data, and repeats the process until all the
+    testing data has been forecasted
 
     Parameters
     ----------
     data : pd.DataFrame
-        the dataframe containing the data to be used for the model
+        the dataframe containing the data
     column : str
         the column of the dataframe to be forecasted
     n_train : int
-        The number of days to use for training.
+        the number of days to use for training
+    n_test : int
+        number of days to forecast
+
+    Returns
+    -------
+        predictions, mape_list, forecast_ci
 
     """
-
     predictions = np.array([])
     forecast_ci = np.zeros((0, 2))
     mape_list = []
-    train = data[:n_train]
-    test = data[column][n_train:]
+    train = data.loc[:, column][:n_train]
+    test = data.loc[:, column][n_train : n_train + n_test]
     day_list = list(range(0, test.shape[0], 7))  # weeks 1, 2, 3, 4...
 
     for i in day_list:
-        model = SARIMAX(train, order=(3, 1, 1), seasonal_order=(3, 1, 1, 7)).fit(
+        model = SARIMAX(train, order=(1, 1, 3), seasonal_order=(1, 1, 3, 7)).fit(
             method="powell"
         )
 
