@@ -232,7 +232,9 @@ def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
         value_name="percent_change_from_baseline",
     )
     inter_df = (
-        pd.pivot_table(inter_df, index=["region", "date"], columns="transportation_type")
+        pd.pivot_table(
+            inter_df, index=["region", "date"], columns="transportation_type"
+        )
         .droplevel(level=0, axis=1)
         .rename_axis(None, axis=1)
         .reset_index()
@@ -241,7 +243,7 @@ def rearrange_df(df: pd.DataFrame) -> pd.DataFrame:
     return inter_df
 
 
-def preproccess_pipeline(
+def preprocess_pipeline(
     df: pd.DataFrame,
     numeric_columns: List[str],
     group_subset: Union[str, List[str]],
@@ -290,7 +292,9 @@ def preproccess_pipeline(
 
     print("Step 2: Checking for duplicate entries...")
     duplicates = (
-        df[df.duplicated(subset=group_subset, keep=False)].groupby(by=group_subset).mean()
+        df[df.duplicated(subset=group_subset, keep=False)]
+        .groupby(by=group_subset)
+        .mean()
     )
 
     if duplicates.shape[0] != 0:
@@ -310,7 +314,9 @@ def preproccess_pipeline(
     return df
 
 
-def test_stationarity(timeseries: pd.Series, nlags: int = 0, confidence: float = 0.05) -> bool:
+def test_stationarity(
+    timeseries: pd.Series, nlags: int = 0, confidence: float = 0.05
+) -> bool:
     """
     > The Augmented Dickey-Fuller test is a statistical test for testing
     whether a time series has a unit root, e.g. has a trend or more generally is autoregressive
@@ -347,50 +353,6 @@ def test_stationarity(timeseries: pd.Series, nlags: int = 0, confidence: float =
             )
 
     return reject
-
-
-def optimize_SARIMA(parameters_list: List[int], d: int, D: int, exog: str) -> pd.DataFrame:
-    """
-    > Given a list of parameters, it will try to fit a SARIMA model for each parameter and return the one
-    with the lowest AIC
-
-    Parameters
-    ----------
-    parameters_list - list with (p, q, P, Q) tuples
-    d : int
-        The number of times that the previous observation is used to forecast the next value.
-    D : int
-        Non-seasonal differencing (by how many times the original series was differenced)
-    exog : str
-        The univariate time series as a pandas Series object.
-
-    Returns
-    -------
-        A dataframe with the parameters and the AIC value
-
-    """
-
-    results = []
-
-    for param in tqdm(parameters_list):
-        try:
-            model = SARIMAX(
-                exog,
-                order=(param[0], d, param[1]),
-                seasonal_order=(param[2], D, param[3], param[4]),
-            ).fit(disp=False, method="powell")
-        except:
-            continue
-
-        aic = model.aic
-        results.append([param, aic])
-
-    result_df = pd.DataFrame(results)
-    result_df.columns = ["(p,q)x(P,Q)", "AIC"]
-
-    result_df.sort_values(by="AIC", ascending=True).reset_index(drop=True, inplace=True)
-
-    return result_df
 
 
 def walk_forward_validation(data: pd.DataFrame, column: str, n_train: int, n_test: int):

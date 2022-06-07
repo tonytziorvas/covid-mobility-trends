@@ -108,19 +108,12 @@ def create_tables_apple():
                 Column('walking', Numeric(precision=6, scale=2)),
             )
 
-            for table in [countries_apple, mobility_stats_apple]:
-                if inspect(engine).has_table(table.name):
-                    print(f'=======\nTable {table.name} already exists! Skipping...')
-                else:
-                    print(f'=======\nCreating table {table.name}...')
-                    table.create(engine)
-
-        for table in [countries_apple, mobility_stats_apple]:
-            if inspect(engine).has_table(table.name):
-                print(f'=======\nTable {table.name} already exists! Skipping...')
-            else:
-                print(f'=======\nCreating table {table.name}...')
-                table.create(engine)
+    for table in [countries_apple, mobility_stats_apple]:
+        if inspect(engine).has_table(table.name):
+            print(f'=======\nTable {table.name} already exists! Skipping...')
+        else:
+            print(f'=======\nCreating table {table.name}...')
+            table.create(engine)
 
 
 def create_tables_json():
@@ -139,11 +132,11 @@ def create_tables_json():
                 Column('deaths', Numeric(precision=7, scale=0)),
             )
 
-            if inspect(engine).has_table(covid_data_greece.name):
-                print(f'=======\nTable {covid_data_greece.name} already exists! Skipping...')
-            else:
-                print(f'=======\nCreating table {covid_data_greece.name}...')
-                covid_data_greece.create(engine)
+    if inspect(engine).has_table(covid_data_greece.name):
+        print(f'=======\nTable {covid_data_greece.name} already exists! Skipping...')
+    else:
+        print(f'=======\nCreating table {covid_data_greece.name}...')
+        covid_data_greece.create(engine)
 
 
 def import_data(df, table_name):
